@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Nail Try-On</string>
+    <string name="camera_permission_rationale">Camera access lets you preview nails on your hands in real time.</string>
+    <string name="grant_permission">Allow camera</string>
+    <string name="capture_photo">Save preview</string>
+    <string name="pick_photo">Pick photo</string>
+    <string name="live_preview">Live</string>
+    <string name="designs">Designs</string>
+    <string name="colors">Colors</string>
+    <string name="opacity">Sheen</string>
+    <string name="clear_photo">Back to camera</string>
+</resources>
