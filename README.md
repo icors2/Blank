@@ -31,6 +31,8 @@ Requires **Android SDK 35** (set `ANDROID_HOME` or `sdk.dir` in `local.propertie
 Bundled file: `app/src/main/assets/hand_landmarker.task`  
 Refresh from: https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task  
 
+Training outline (TensorFlow / Colab): see **[docs/nail_segmentation_colab_outline.ipynb](docs/nail_segmentation_colab_outline.ipynb)** — includes optional download for the Kaggle dataset [muhammadhammad261/nail-segmentation-dataset](https://www.kaggle.com/datasets/muhammadhammad261/nail-segmentation-dataset).
+
 ### Optional nail segmentation model
 
 Add `app/src/main/assets/nail_seg.tflite` with float32 NHWC input `[1,H,W,3]` and a nail-probability map output (see `NailSegmentationHelper`). Until then the UI shows a hint and uses landmark masks only.
