@@ -1,13 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Nail Try-On</string>
-    <string name="camera_permission_rationale">Camera access lets you preview nails on your hands in real time.</string>
+    <string name="camera_permission_rationale">Camera access is only used when you take a new photo in the app.</string>
     <string name="grant_permission">Allow camera</string>
-    <string name="capture_photo">Save preview</string>
+    <string name="take_photo">Take photo</string>
     <string name="pick_photo">Pick photo</string>
-    <string name="live_preview">Live</string>
     <string name="designs">Designs</string>
     <string name="colors">Colors</string>
     <string name="opacity">Sheen</string>
-    <string name="clear_photo">Back to camera</string>
+    <string name="clear_photo">New photo</string>
+    <string name="empty_state_hint">Pick a hand photo or take one to try polish colors. Everything runs on your phone.</string>
+    <string name="error_load_image">Could not load that image.</string>
+    <string name="error_no_hand">No hand detected. Try a clearer photo of your hand.</string>
+    <string name="use_tflite_mask">Use nail mask model</string>
+    <string name="landmark_mask_hint">Using fingertip landmarks for the nail area. Add assets/nail_seg.tflite for tighter masks.</string>
 </resources>

@@ -1,22 +1,11 @@
 package com.salon.nailtryon
 
 import android.Manifest
-import android.content.ContentValues
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.os.Build
-import android.os.Environment
-import android.provider.MediaStore
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.ImageCapture
-import androidx.camera.core.ImageCaptureException
-import androidx.camera.core.Preview
-import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.view.PreviewView
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -35,17 +24,18 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.AddAPhoto
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -67,21 +57,15 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.content.ContextCompat
-import androidx.lifecycle.LifecycleOwner
-import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.core.content.FileProvider
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.text.SimpleDateFormat
-import java.util.Locale
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
-import kotlin.math.min
+import java.io.File
 
 private val PaletteColors = listOf(
     Color(0xFFE91E63),
@@ -96,16 +80,13 @@ private val PaletteColors = listOf(
     Color(0xFFFCE4EC),
 )
 
+private const val DETECT_MAX_SIDE = 1024
+private const val LANDMARK_MASK_MAX_SIDE = 512
+
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
 fun NailTryOnScreen() {
     val cameraPermission = rememberPermissionState(Manifest.permission.CAMERA)
-
-    LaunchedEffect(Unit) {
-        if (!cameraPermission.status.isGranted) {
-            cameraPermission.launchPermissionRequest()
-        }
-    }
 
     Scaffold(
         topBar = {
@@ -117,80 +98,194 @@ fun NailTryOnScreen() {
             )
         },
     ) { innerPadding ->
-        when {
-            cameraPermission.status.isGranted -> {
-                NailTryOnContent(modifier = Modifier.padding(innerPadding))
-            }
-
-            else -> {
-                Column(
-                    modifier = Modifier
-                        .padding(innerPadding)
-                        .padding(24.dp)
-                        .fillMaxSize(),
-                    verticalArrangement = Arrangement.Center,
-                ) {
-                    Text(
-                        text = stringResource(R.string.camera_permission_rationale),
-                        style = MaterialTheme.typography.bodyLarge,
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Button(onClick = { cameraPermission.launchPermissionRequest() }) {
-                        Text(stringResource(R.string.grant_permission))
-                    }
-                }
-            }
-        }
+        NailTryOnContent(
+            modifier = Modifier.padding(innerPadding),
+            cameraPermissionGranted = cameraPermission.status.isGranted,
+            onRequestCameraPermission = { cameraPermission.launchPermissionRequest() },
+        )
     }
 }
 
 @Composable
-private fun NailTryOnContent(modifier: Modifier = Modifier) {
+private fun NailTryOnContent(
+    modifier: Modifier = Modifier,
+    cameraPermissionGranted: Boolean,
+    onRequestCameraPermission: () -> Unit,
+) {
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
-    val mainExecutor = remember { ContextCompat.getMainExecutor(context) }
-    val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
-
-    DisposableEffect(Unit) {
-        onDispose {
-            cameraExecutor.shutdown()
-        }
-    }
-
-    var selectedColor by remember { mutableStateOf(PaletteColors.first()) }
-    var selectedDesign by remember { mutableStateOf(NailDesign.SOLID) }
-    var nailOpacity by remember { mutableFloatStateOf(0.78f) }
-
-    var frozenBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var frozenLandmarks by remember { mutableStateOf<List<Pair<Float, Float>>?>(null) }
 
     val landmarker = remember {
         HandLandmarkerHelper(context.applicationContext)
     }
-
-    DisposableEffect(Unit) {
-        onDispose { landmarker.close() }
+    val segmenter = remember {
+        NailSegmentationHelper(context.applicationContext)
     }
 
-    var overlayState by remember { mutableStateOf<OverlayState?>(null) }
-    var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
+    DisposableEffect(Unit) {
+        onDispose {
+            landmarker.close()
+            segmenter.close()
+        }
+    }
+
+    var sourceBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var processedBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var landmarks by remember { mutableStateOf<List<Pair<Float, Float>>?>(null) }
+    var processing by remember { mutableStateOf(false) }
+    var statusMessage by remember { mutableStateOf<String?>(null) }
+
+    var selectedColor by remember { mutableStateOf(PaletteColors.first()) }
+    var selectedDesign by remember { mutableStateOf(NailDesign.SOLID) }
+    var nailOpacity by remember { mutableFloatStateOf(0.78f) }
+    var preferTfliteMask by remember { mutableStateOf(segmenter.isReady) }
+
+    LaunchedEffect(sourceBitmap, landmarks, selectedColor, selectedDesign, nailOpacity, preferTfliteMask) {
+        val src = sourceBitmap ?: run {
+            processedBitmap = null
+            return@LaunchedEffect
+        }
+        val lm = landmarks
+        if (lm == null || lm.size < 21) {
+            processedBitmap = src
+            return@LaunchedEffect
+        }
+
+        processing = true
+        statusMessage = null
+        try {
+            val previous = processedBitmap
+            val result = withContext(Dispatchers.Default) {
+                val maskFull = if (preferTfliteMask && segmenter.isReady) {
+                    segmenter.buildMaskForBitmap(src)
+                } else {
+                    null
+                }
+                val mask = maskFull ?: run {
+                    val maxSide = maxOf(src.width, src.height)
+                    val scale = if (maxSide > LANDMARK_MASK_MAX_SIDE) {
+                        LANDMARK_MASK_MAX_SIDE.toFloat() / maxSide
+                    } else {
+                        1f
+                    }
+                    val mw = (src.width * scale).toInt().coerceAtLeast(1)
+                    val mh = (src.height * scale).toInt().coerceAtLeast(1)
+                    val small = LandmarkNailMask.buildSoftMask(mw, mh, lm)
+                    if (scale >= 0.999f) {
+                        small
+                    } else {
+                        Bitmap.createScaledBitmap(small, src.width, src.height, true).also {
+                            if (it !== small) small.recycle()
+                        }
+                    }
+                }
+                val tinted = blendNailPolish(
+                    src,
+                    mask,
+                    selectedColor.toPolishArgb(),
+                    nailOpacity,
+                )
+                val designed = applyDesignToBitmap(
+                    tinted,
+                    selectedDesign,
+                    selectedColor.toPolishArgb(),
+                    nailOpacity,
+                )
+                if (tinted !== designed && tinted !== src) tinted.recycle()
+                designed
+            }
+            processedBitmap = result
+            if (previous != null && previous !== src && previous !== result) {
+                previous.recycle()
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            statusMessage = e.message
+            processedBitmap = src
+        } finally {
+            processing = false
+        }
+    }
 
     val galleryLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent(),
     ) { uri ->
         uri ?: return@rememberLauncherForActivityResult
         scope.launch {
-            val bmp = withContext(Dispatchers.IO) {
-                context.contentResolver.openInputStream(uri)?.use(BitmapFactory::decodeStream)
-            } ?: return@launch
-            val result = withContext(Dispatchers.Default) {
-                landmarker.detect(bmp)
+            processing = true
+            statusMessage = null
+            val full = withContext(Dispatchers.IO) {
+                decodeBitmapMaxSide(context, uri, maxSide = 2048)
             }
+            if (full == null) {
+                statusMessage = context.getString(R.string.error_load_image)
+                processing = false
+                return@launch
+            }
+            val forDetect = if (maxOf(full.width, full.height) > DETECT_MAX_SIDE) {
+                full.scaleToMaxSide(DETECT_MAX_SIDE)
+            } else {
+                full
+            }
+            val result = withContext(Dispatchers.Default) {
+                landmarker.detect(forDetect)
+            }
+            if (forDetect !== full) forDetect.recycle()
             val lm = extractPrimaryHandLandmarks(result)
-            frozenBitmap = bmp
-            frozenLandmarks = lm
-            overlayState = null
+            sourceBitmap = full
+            landmarks = lm
+            if (lm == null) {
+                statusMessage = context.getString(R.string.error_no_hand)
+                processedBitmap = full
+            }
+            processing = false
+        }
+    }
+
+    val captureUri = remember {
+        val file = File(context.cacheDir, "nail_capture.jpg")
+        FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            file,
+        )
+    }
+
+    val takePictureLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture(),
+    ) { success ->
+        if (!success) return@rememberLauncherForActivityResult
+        scope.launch {
+            processing = true
+            statusMessage = null
+            val full = withContext(Dispatchers.IO) {
+                context.contentResolver.openInputStream(captureUri)?.use { stream ->
+                    BitmapFactory.decodeStream(stream)
+                }
+            }
+            if (full == null) {
+                statusMessage = context.getString(R.string.error_load_image)
+                processing = false
+                return@launch
+            }
+            val forDetect = if (maxOf(full.width, full.height) > DETECT_MAX_SIDE) {
+                full.scaleToMaxSide(DETECT_MAX_SIDE)
+            } else {
+                full
+            }
+            val result = withContext(Dispatchers.Default) {
+                landmarker.detect(forDetect)
+            }
+            if (forDetect !== full) forDetect.recycle()
+            val lm = extractPrimaryHandLandmarks(result)
+            sourceBitmap = full
+            landmarks = lm
+            if (lm == null) {
+                statusMessage = context.getString(R.string.error_no_hand)
+                processedBitmap = full
+            }
+            processing = false
         }
     }
 
@@ -201,36 +296,49 @@ private fun NailTryOnContent(modifier: Modifier = Modifier) {
                 .weight(1f)
                 .background(Color.Black),
         ) {
-            if (frozenBitmap != null && frozenLandmarks != null) {
-                StaticTryOnView(
-                    bitmap = frozenBitmap!!,
-                    landmarks = frozenLandmarks!!,
-                    color = selectedColor,
-                    design = selectedDesign,
-                    opacity = nailOpacity,
-                    mirrorHorizontal = false,
-                )
-            } else {
-                CameraTryOnLayer(
-                    lifecycleOwner = lifecycleOwner,
-                    landmarker = landmarker,
-                    cameraExecutor = cameraExecutor,
-                    mainExecutor = mainExecutor,
-                    onOverlayUpdate = { overlayState = it },
-                    onImageCaptureReady = { imageCapture = it },
-                    modifier = Modifier.fillMaxSize(),
-                )
-
-                overlayState?.let { state ->
-                    OverlayCanvas(
-                        overlayState = state,
-                        color = selectedColor,
-                        design = selectedDesign,
-                        opacity = nailOpacity,
-                        mirrorHorizontal = true,
+            when {
+                processedBitmap != null -> {
+                    Image(
+                        bitmap = processedBitmap!!.asImageBitmap(),
+                        contentDescription = null,
                         modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Fit,
                     )
                 }
+
+                else -> {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(24.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.empty_state_hint),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = Color.White.copy(alpha = 0.85f),
+                        )
+                    }
+                }
+            }
+
+            if (processing) {
+                LinearProgressIndicator(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth(),
+                )
+            }
+
+            statusMessage?.let { msg ->
+                Text(
+                    text = msg,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 48.dp, start = 16.dp, end = 16.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
 
             Row(
@@ -241,84 +349,48 @@ private fun NailTryOnContent(modifier: Modifier = Modifier) {
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                if (frozenBitmap == null) {
-                    IconButton(
-                        onClick = {
-                            val capture = imageCapture ?: return@IconButton
-                            val name = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
-                                .format(System.currentTimeMillis())
-                            val relativePath = "${Environment.DIRECTORY_DCIM}/NailTryOn"
-                            val contentValues = ContentValues().apply {
-                                put(MediaStore.MediaColumns.DISPLAY_NAME, "NAIL_$name.jpg")
-                                put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                    put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
-                                }
-                            }
-                            val output = ImageCapture.OutputFileOptions.Builder(
-                                context.contentResolver,
-                                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                                contentValues,
-                            ).build()
-
-                            capture.takePicture(
-                                output,
-                                mainExecutor,
-                                object : ImageCapture.OnImageSavedCallback {
-                                    override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
-                                        val uri = outputFileResults.savedUri ?: return
-                                        scope.launch {
-                                            val bmp = withContext(Dispatchers.IO) {
-                                                context.contentResolver.openInputStream(uri)
-                                                    ?.use(BitmapFactory::decodeStream)
-                                            } ?: return@launch
-                                            val result = withContext(Dispatchers.Default) {
-                                                landmarker.detect(bmp)
-                                            }
-                                            frozenBitmap = bmp
-                                            frozenLandmarks = extractPrimaryHandLandmarks(result)
-                                            overlayState = null
-                                        }
-                                    }
-
-                                    override fun onError(exception: ImageCaptureException) {
-                                    }
-                                },
-                            )
-                        },
-                        modifier = Modifier
-                            .size(64.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primary),
-                    ) {
-                        Icon(
-                            Icons.Default.CameraAlt,
-                            contentDescription = stringResource(R.string.capture_photo),
-                            tint = MaterialTheme.colorScheme.onPrimary,
-                        )
-                    }
-                }
-
                 IconButton(
                     onClick = { galleryLauncher.launch("image/*") },
                     modifier = Modifier
                         .size(52.dp)
                         .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)),
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f)),
                 ) {
                     Icon(Icons.Default.PhotoLibrary, contentDescription = stringResource(R.string.pick_photo))
                 }
 
-                if (frozenBitmap != null) {
+                IconButton(
+                    onClick = {
+                        if (!cameraPermissionGranted) {
+                            onRequestCameraPermission()
+                        } else {
+                            takePictureLauncher.launch(captureUri)
+                        }
+                    },
+                    modifier = Modifier
+                        .size(56.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary),
+                ) {
+                    Icon(
+                        Icons.Default.AddAPhoto,
+                        contentDescription = stringResource(R.string.take_photo),
+                        tint = MaterialTheme.colorScheme.onPrimary,
+                    )
+                }
+
+                if (sourceBitmap != null) {
                     IconButton(
                         onClick = {
-                            frozenBitmap = null
-                            frozenLandmarks = null
+                            sourceBitmap = null
+                            processedBitmap = null
+                            landmarks = null
+                            statusMessage = null
                         },
                         modifier = Modifier
                             .size(52.dp)
                             .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)),
+                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f)),
                     ) {
                         Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.clear_photo))
                     }
@@ -333,188 +405,27 @@ private fun NailTryOnContent(modifier: Modifier = Modifier) {
             onDesignSelected = { selectedDesign = it },
             opacity = nailOpacity,
             onOpacityChange = { nailOpacity = it },
+            tfliteAvailable = segmenter.isReady,
+            preferTfliteMask = preferTfliteMask,
+            onPreferTfliteMaskChange = { preferTfliteMask = it },
         )
     }
 }
 
-private data class OverlayState(
-    val landmarks: List<Pair<Float, Float>>,
-    val imageWidth: Int,
-    val imageHeight: Int,
-)
-
-@androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
-@Composable
-private fun CameraTryOnLayer(
-    lifecycleOwner: LifecycleOwner,
-    landmarker: HandLandmarkerHelper,
-    cameraExecutor: ExecutorService,
-    mainExecutor: java.util.concurrent.Executor,
-    onOverlayUpdate: (OverlayState?) -> Unit,
-    onImageCaptureReady: (ImageCapture) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val context = LocalContext.current
-    val previewView = remember {
-        PreviewView(context).apply {
-            scaleType = PreviewView.ScaleType.FILL_CENTER
-            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
-        }
+private fun decodeBitmapMaxSide(context: android.content.Context, uri: Uri, maxSide: Int): Bitmap? {
+    val resolver = context.contentResolver
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    resolver.openInputStream(uri)?.use {
+        BitmapFactory.decodeStream(it, null, bounds)
+    } ?: return null
+    var sample = 1
+    val maxDim = maxOf(bounds.outWidth, bounds.outHeight)
+    while (maxDim / sample > maxSide) {
+        sample *= 2
     }
-
-    DisposableEffect(lifecycleOwner, previewView) {
-        val providerFuture = ProcessCameraProvider.getInstance(context)
-        val runnable = Runnable {
-            val provider = providerFuture.get()
-            val preview = Preview.Builder().build().also {
-                it.surfaceProvider = previewView.surfaceProvider
-            }
-
-            val analysis = ImageAnalysis.Builder()
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
-                .build()
-
-            analysis.setAnalyzer(cameraExecutor) { imageProxy ->
-                try {
-                    val bitmap = imageProxy.toBitmapRgba()
-                    val result = landmarker.detect(bitmap)
-                    val lm = extractPrimaryHandLandmarks(result)
-                    val w = bitmap.width
-                    val h = bitmap.height
-                    mainExecutor.execute {
-                        if (lm != null) {
-                            onOverlayUpdate(
-                                OverlayState(
-                                    landmarks = lm,
-                                    imageWidth = w,
-                                    imageHeight = h,
-                                ),
-                            )
-                        } else {
-                            onOverlayUpdate(null)
-                        }
-                    }
-                } catch (_: Throwable) {
-                    mainExecutor.execute { onOverlayUpdate(null) }
-                } finally {
-                    imageProxy.close()
-                }
-            }
-
-            val capture = ImageCapture.Builder()
-                .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-                .build()
-
-            onImageCaptureReady(capture)
-
-            val selector = CameraSelector.DEFAULT_FRONT_CAMERA
-
-            try {
-                provider.unbindAll()
-                provider.bindToLifecycle(
-                    lifecycleOwner,
-                    selector,
-                    preview,
-                    analysis,
-                    capture,
-                )
-            } catch (_: Exception) {
-                onOverlayUpdate(null)
-            }
-        }
-        providerFuture.addListener(runnable, ContextCompat.getMainExecutor(context))
-
-        onDispose {
-            providerFuture.addListener({
-                try {
-                    providerFuture.get().unbindAll()
-                } catch (_: Exception) {
-                }
-            }, mainExecutor)
-            onOverlayUpdate(null)
-        }
-    }
-
-    AndroidView(
-        factory = { previewView },
-        modifier = modifier,
-    )
-}
-
-@Composable
-private fun OverlayCanvas(
-    overlayState: OverlayState,
-    color: Color,
-    design: NailDesign,
-    opacity: Float,
-    mirrorHorizontal: Boolean,
-    modifier: Modifier = Modifier,
-) {
-    Canvas(modifier = modifier) {
-        val cw = size.width
-        val ch = size.height
-        val iw = overlayState.imageWidth.toFloat()
-        val ih = overlayState.imageHeight.toFloat()
-
-        val scale = min(cw / iw, ch / ih)
-        val ox = (cw - iw * scale) / 2f
-        val oy = (ch - ih * scale) / 2f
-
-        val mappedLandmarks = overlayState.landmarks.map { (nx, ny) ->
-            val xNorm = if (mirrorHorizontal) 1f - nx else nx
-            Pair(ox + xNorm * iw * scale, oy + ny * ih * scale)
-        }
-
-        NailOverlayPainter.drawNailsPixels(
-            scope = this,
-            landmarksPx = mappedLandmarks,
-            baseColor = color,
-            opacity = opacity,
-            design = design,
-        )
-    }
-}
-
-@Composable
-private fun StaticTryOnView(
-    bitmap: Bitmap,
-    landmarks: List<Pair<Float, Float>>,
-    color: Color,
-    design: NailDesign,
-    opacity: Float,
-    mirrorHorizontal: Boolean,
-) {
-    Box(modifier = Modifier.fillMaxSize()) {
-        Image(
-            bitmap = bitmap.asImageBitmap(),
-            contentDescription = null,
-            modifier = Modifier.fillMaxSize(),
-            contentScale = ContentScale.Fit,
-        )
-
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val cw = size.width
-            val ch = size.height
-            val iw = bitmap.width.toFloat()
-            val ih = bitmap.height.toFloat()
-            val scale = min(cw / iw, ch / ih)
-            val ox = (cw - iw * scale) / 2f
-            val oy = (ch - ih * scale) / 2f
-
-            val mappedLandmarks = landmarks.map { (nx, ny) ->
-                val xNorm = if (mirrorHorizontal) 1f - nx else nx
-                Pair(ox + xNorm * iw * scale, oy + ny * ih * scale)
-            }
-
-            NailOverlayPainter.drawNailsPixels(
-                scope = this,
-                landmarksPx = mappedLandmarks,
-                baseColor = color,
-                opacity = opacity,
-                design = design,
-            )
-        }
+    val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+    return resolver.openInputStream(uri)?.use {
+        BitmapFactory.decodeStream(it, null, opts)
     }
 }
 
@@ -526,6 +437,9 @@ private fun ControlsPanel(
     onDesignSelected: (NailDesign) -> Unit,
     opacity: Float,
     onOpacityChange: (Float) -> Unit,
+    tfliteAvailable: Boolean,
+    preferTfliteMask: Boolean,
+    onPreferTfliteMaskChange: (Boolean) -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -533,6 +447,28 @@ private fun ControlsPanel(
             .background(MaterialTheme.colorScheme.surface)
             .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
+        if (tfliteAvailable) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(stringResource(R.string.use_tflite_mask), style = MaterialTheme.typography.labelLarge)
+                Switch(
+                    checked = preferTfliteMask,
+                    onCheckedChange = onPreferTfliteMaskChange,
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+        } else {
+            Text(
+                stringResource(R.string.landmark_mask_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+
         Text(stringResource(R.string.colors), style = MaterialTheme.typography.labelLarge)
         Spacer(modifier = Modifier.height(8.dp))
         Row(

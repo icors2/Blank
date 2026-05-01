@@ -60,12 +60,9 @@ dependencies {
     implementation("androidx.compose.material3:material3:1.3.1")
     implementation("androidx.compose.material:material-icons-extended")
 
-    implementation("androidx.camera:camera-core:1.4.0")
-    implementation("androidx.camera:camera-camera2:1.4.0")
-    implementation("androidx.camera:camera-lifecycle:1.4.0")
-    implementation("androidx.camera:camera-view:1.4.0")
-
     implementation("com.google.mediapipe:tasks-vision:0.10.21")
+
+    implementation("org.tensorflow:tensorflow-lite:2.14.0")
 
     implementation("com.google.accompanist:accompanist-permissions:0.36.0")
 

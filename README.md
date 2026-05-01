@@ -1,44 +1,46 @@
 # Nail Try-On (Android)
 
-AR-assisted nail color preview for salons: live front-camera preview with fingertip overlays, optional photo from gallery, capture to gallery, and polish color plus simple design styles (French tip, glitter, matte).
+Offline-first salon nail preview: **pick or capture a hand photo**, detect hands with **MediaPipe Hand Landmarker**, build a **nail mask** from either **soft landmark ovals** or an optional bundled **TensorFlow Lite** segmenter, then **recolor and blend** on the bitmap. No cloud required.
 
-## Product plan
+## Flow
 
-1. **Core loop**: Detect hands (MediaPipe Hand Landmarker), map fingertip landmarks to nail-shaped overlays, tint with selected polish color.
-2. **Live mode**: CameraX preview + analysis stream (RGBA frames) → overlay drawn on top with Compose `Canvas`.
-3. **Still photos**: Pick from gallery or capture; run the same detector once and paint overlays on the bitmap view (fit-center math matches live preview).
-4. **Polish UX**: Horizontal palette, design chips, opacity (“sheen”) slider.
-5. **Next iterations** (not in this MVP): segmented nail masks, 3D nail meshes, catalog SKUs, booking integration, ML segmentation for cleaner edges.
+1. User selects gallery image or takes a photo (`CAMERA` only for capture).
+2. Hand landmarks are detected ([RunningMode.IMAGE](https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker/android)).
+3. Mask:
+   - Default: blurred ellipses at fingertips ([LandmarkNailMask](app/src/main/java/com/salon/nailtryon/NailBlend.kt)).
+   - Optional: place `nail_seg.tflite` in `app/src/main/assets/` and enable **Use nail mask model** (adjust [NailSegmentationHelper](app/src/main/java/com/salon/nailtryon/NailSegmentationHelper.kt) I/O to match your export).
+4. [blendNailPolish](app/src/main/java/com/salon/nailtryon/NailBlend.kt) tints masked pixels; light glitter/matte passes optional.
 
 ## Tech stack
 
 - Kotlin, Jetpack Compose, Material 3  
-- CameraX (preview, image analysis, capture)  
-- MediaPipe Tasks Vision (`hand_landmarker.task` bundled under `assets/`)  
-- Min SDK 26, target/compile SDK 35  
+- MediaPipe Tasks Vision (`hand_landmarker.task` in `assets/`)  
+- TensorFlow Lite (optional `nail_seg.tflite`)  
+- Min SDK 26, compile/target SDK 35  
 
 ## Build
 
-Requires Android Studio Koala+ or a machine with **Android SDK 35** and JDK 17.
+Requires **Android SDK 35** (set `ANDROID_HOME` or `sdk.dir` in `local.properties`) and JDK 17.
 
 ```bash
 ./gradlew :app:assembleDebug
 ```
 
-Install the generated APK on a device with a front camera (`app/build/outputs/apk/debug/`).
-
 ### Hand model
 
-The file `app/src/main/assets/hand_landmarker.task` is the official MediaPipe float16 hand landmarker. To refresh:
+Bundled file: `app/src/main/assets/hand_landmarker.task`  
+Refresh from: https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task  
 
-https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task
+### Optional nail segmentation model
+
+Add `app/src/main/assets/nail_seg.tflite` with float32 NHWC input `[1,H,W,3]` and a nail-probability map output (see `NailSegmentationHelper`). Until then the UI shows a hint and uses landmark masks only.
 
 ## Permissions
 
-- `CAMERA` — live preview and capture  
-- Photo picker uses the system UI on Android 13+ (no broad storage read when using “Pick photo”).
+- **Gallery**: system photo picker on Android 13+ (`READ_MEDIA_IMAGES` declared).  
+- **Camera**: only when using “Take photo.”
 
 ## Notes
 
-- Front-camera preview is mirrored for the customer; landmark X coordinates are mirrored in the overlay so nails align with what they see.
-- Overlays are stylized ellipses at fingertips—good for color concepts, not pixel-perfect manicure simulation.
+- **French** design chip currently maps to the same polish tint as solid (no separate free-edge band in bitmap mode yet); extend `applyDesignToBitmap` if needed.
+- Photorealism is limited without a trained nail segmenter and careful blending—this MVP targets **fast local color concepts**.
