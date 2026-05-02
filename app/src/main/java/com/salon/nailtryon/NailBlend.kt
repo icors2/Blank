@@ -90,11 +90,10 @@ object LandmarkNailMask {
 }
 
 /**
- * Recolors nail regions using [mask] as alpha (full resolution). [mask] must match [base] dimensions.
+ * recolors nail regions using [mask] as alpha (full resolution). [mask] must match [base] dimensions.
  *
- * Uses **HSV transfer**: keeps value (brightness) from the photo so highlights and shadows stay,
- * and shifts hue/saturation toward the polish — reads more like real lacquer on the nail than
- * flat RGB alpha-over.
+ * Uses **Luminance-Preserving Blending**: keeps the underlying shading (highlights/shadows)
+ * from the photo and applies the polish color. Adds a gloss pass for photorealism.
  */
 fun blendNailPolish(
     base: Bitmap,
@@ -108,60 +107,58 @@ fun blendNailPolish(
     val out = base.copy(Bitmap.Config.ARGB_8888, true)
     val w = base.width
     val h = base.height
-    val pr = polishArgb shr 16 and 0xFF
-    val pg = polishArgb shr 8 and 0xFF
-    val pb = polishArgb and 0xFF
+    val pr = (polishArgb shr 16 and 0xFF) / 255f
+    val pg = (polishArgb shr 8 and 0xFF) / 255f
+    val pb = (polishArgb and 0xFF) / 255f
+    
     val basePixels = IntArray(w * h)
     val maskPixels = IntArray(w * h)
     base.getPixels(basePixels, 0, w, 0, 0, w, h)
     mask.getPixels(maskPixels, 0, w, 0, 0, w, h)
 
     val op = opacity.coerceIn(0f, 1f)
-    val polishHsv = FloatArray(3)
-    AndroidColor.RGBToHSV(pr, pg, pb, polishHsv)
-    val hsvPixel = FloatArray(3)
 
     var i = 0
     while (i < basePixels.size) {
         val ma = (maskPixels[i] shr 24) and 0xFF
-        if (ma > 8) {
+        if (ma > 2) {
             val mix = (ma / 255f) * op
-            val br = basePixels[i] shr 16 and 0xFF
-            val bg = basePixels[i] shr 8 and 0xFF
-            val bb = basePixels[i] and 0xFF
-            val ba = basePixels[i] shr 24 and 0xFF
-            AndroidColor.RGBToHSV(br, bg, bb, hsvPixel)
-            val bs = hsvPixel[1]
-            val bv = hsvPixel[2]
+            val color = basePixels[i]
+            val br = (color shr 16 and 0xFF) / 255f
+            val bg = (color shr 8 and 0xFF) / 255f
+            val bb = (color and 0xFF) / 255f
+            val ba = (color shr 24 and 0xFF)
 
-            val nh = polishHsv[0]
-            val ns = bs + (polishHsv[1] - bs) * mix * CHROMA_BLEND
-            val nv = bv
-
-            hsvPixel[0] = nh
-            hsvPixel[1] = ns.coerceIn(0f, 1f)
-            hsvPixel[2] = nv.coerceIn(0f, 1f)
-            var blended = AndroidColor.HSVToColor(ba, hsvPixel)
-
-            if (mix > 0.18f && bv > SPECULAR_V_THRESHOLD) {
-                val t = ((bv - SPECULAR_V_THRESHOLD) / (1f - SPECULAR_V_THRESHOLD)).coerceIn(0f, 1f)
-                val kick = (t * t * SPECULAR_GAIN * mix).toInt()
-                var nr = blended shr 16 and 0xFF
-                var ng = blended shr 8 and 0xFF
-                var nb = blended and 0xFF
-                nr = min(255, nr + kick)
-                ng = min(255, ng + kick)
-                nb = min(255, nb + kick)
-                blended = (ba shl 24) or (nr shl 16) or (ng shl 8) or nb
+            // Calculate perceived brightness (luminance)
+            val lum = 0.299f * br + 0.587f * bg + 0.114f * bb
+            
+            // Photorealistic approach: 
+            // 1. Multiply polish color by luminance to keep shadows
+            // 2. Add specular highlights back on top
+            
+            // Base tinted color
+            var nr = pr * lum * 1.1f // Slight boost to avoid being too dark
+            var ng = pg * lum * 1.1f
+            var nb = pb * lum * 1.1f
+            
+            // Specular highlights: if original pixel is very bright, it's a reflection
+            if (lum > SPECULAR_V_THRESHOLD) {
+                val specular = ((lum - SPECULAR_V_THRESHOLD) / (1f - SPECULAR_V_THRESHOLD)).coerceAtLeast(0f)
+                val gloss = Math.pow(specular.toDouble(), 1.5).toFloat() * GLOSS_INTENSITY
+                nr += gloss
+                ng += gloss
+                nb += gloss
             }
 
-            val nr = blended shr 16 and 0xFF
-            val ng = blended shr 8 and 0xFF
-            val nb = blended and 0xFF
-            val fr = (br * (1 - mix) + nr * mix).toInt().coerceIn(0, 255)
-            val fg = (bg * (1 - mix) + ng * mix).toInt().coerceIn(0, 255)
-            val fb = (bb * (1 - mix) + nb * mix).toInt().coerceIn(0, 255)
-            basePixels[i] = (ba shl 24) or (fr shl 16) or (fg shl 8) or fb
+            // Final blend between base photo and processed nail
+            val fr = (br * (1 - mix) + nr * mix).coerceIn(0f, 1f)
+            val fg = (bg * (1 - mix) + ng * mix).coerceIn(0f, 1f)
+            val fb = (bb * (1 - mix) + nb * mix).coerceIn(0f, 1f)
+
+            basePixels[i] = (ba shl 24) or 
+                ((fr * 255).toInt() shl 16) or 
+                ((fg * 255).toInt() shl 8) or 
+                (fb * 255).toInt()
         }
         i++
     }
@@ -169,9 +166,8 @@ fun blendNailPolish(
     return out
 }
 
-private const val CHROMA_BLEND = 0.94f
-private const val SPECULAR_V_THRESHOLD = 0.52f
-private const val SPECULAR_GAIN = 28f
+private const val SPECULAR_V_THRESHOLD = 0.45f
+private const val GLOSS_INTENSITY = 0.35f
 
 /** Applies design-specific tweaks after base polish tint (lightweight, local). */
 fun applyDesignToBitmap(bitmap: Bitmap, design: NailDesign, polishArgb: Int, opacity: Float): Bitmap {

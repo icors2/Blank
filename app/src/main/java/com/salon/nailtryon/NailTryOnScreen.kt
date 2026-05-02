@@ -69,16 +69,16 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 private val PaletteColors = listOf(
-    Color(0xFFE91E63),
-    Color(0xFFFF4081),
-    Color(0xFFFF9800),
-    Color(0xFFFFEB3B),
-    Color(0xFF8BC34A),
-    Color(0xFF00BCD4),
-    Color(0xFF3F51B5),
-    Color(0xFF673AB7),
-    Color(0xFF212121),
-    Color(0xFFFCE4EC),
+    Color(0xFF8D0014), // Classic Deep Red
+    Color(0xFFC0445C), // Mauve
+    Color(0xFFE1B9B4), // Nude Pink
+    Color(0xFFF3E5E2), // Pale Pearl
+    Color(0xFF2E1A47), // Deep Plum
+    Color(0xFF003366), // Navy Blue
+    Color(0xFF1B4D3E), // Forest Green
+    Color(0xFF4A4A4A), // Charcoal
+    Color(0xFFB87333), // Copper/Bronze
+    Color(0xFFE5E4E2), // Platinum
 )
 
 private const val DETECT_MAX_SIDE = 1024
