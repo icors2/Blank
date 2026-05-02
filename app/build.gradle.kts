@@ -39,7 +39,14 @@ android {
         compose = true
     }
 
+    androidResources {
+        noCompress("tflite")
+    }
+
     packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
@@ -62,7 +69,7 @@ dependencies {
 
     implementation("com.google.mediapipe:tasks-vision:0.10.21")
 
-    implementation("org.tensorflow:tensorflow-lite:2.14.0")
+    implementation("org.tensorflow:tensorflow-lite:2.17.0")
 
     implementation("com.google.accompanist:accompanist-permissions:0.36.0")
 

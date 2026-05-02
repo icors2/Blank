@@ -27,6 +27,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddAPhoto
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -83,7 +84,7 @@ private val PaletteColors = listOf(
 private const val DETECT_MAX_SIDE = 1024
 private const val LANDMARK_MASK_MAX_SIDE = 512
 
-@OptIn(ExperimentalPermissionsApi::class)
+@OptIn(ExperimentalPermissionsApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun NailTryOnScreen() {
     val cameraPermission = rememberPermissionState(Manifest.permission.CAMERA)
@@ -429,6 +430,7 @@ private fun decodeBitmapMaxSide(context: android.content.Context, uri: Uri, maxS
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ControlsPanel(
     selectedColor: Color,
