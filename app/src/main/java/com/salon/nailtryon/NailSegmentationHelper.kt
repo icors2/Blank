@@ -3,6 +3,7 @@ package com.salon.nailtryon
 import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
+import org.tensorflow.lite.DataType
 import org.tensorflow.lite.Interpreter
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -39,6 +40,9 @@ class NailSegmentationHelper(context: Context) {
         val interp = interpreter ?: return null
         return try {
             val inTensor = interp.getInputTensor(0)
+            require(inTensor.dataType() == DataType.FLOAT32) {
+                "Model input must be FLOAT32, but found ${inTensor.dataType()}"
+            }
             val inShape = inTensor.shape()
             val (iw, ih) = resolveInputSpatialSize(inShape)
 
@@ -46,10 +50,13 @@ class NailSegmentationHelper(context: Context) {
 
             val inputBuffer = rgbBitmapToFloatBuffer(scaled)
             require(inputBuffer.capacity() == inTensor.numBytes()) {
-                "Input buffer ${inputBuffer.capacity()} != tensor ${inTensor.numBytes()}"
+                "Input buffer capacity (${inputBuffer.capacity()}) != tensor bytes (${inTensor.numBytes()})"
             }
 
             val outTensor = interp.getOutputTensor(0)
+            require(outTensor.dataType() == DataType.FLOAT32) {
+                "Model output must be FLOAT32, but found ${outTensor.dataType()}"
+            }
             val outShape = outTensor.shape()
             val outputBuffer = ByteBuffer.allocateDirect(outTensor.numBytes()).apply {
                 order(ByteOrder.nativeOrder())

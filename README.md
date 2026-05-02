@@ -9,6 +9,7 @@ Offline-first salon nail preview: **pick or capture a hand photo**, detect hands
 3. Mask:
    - Default: blurred ellipses at fingertips ([LandmarkNailMask](app/src/main/java/com/salon/nailtryon/NailBlend.kt)).
    - Optional: place `nail_seg.tflite` in `app/src/main/assets/` and enable **Use nail mask model** (adjust [NailSegmentationHelper](app/src/main/java/com/salon/nailtryon/NailSegmentationHelper.kt) I/O to match your export).
+   - **Isolation**: When using the TFLite model, users can toggle **Select Single Nail** to isolate and color a specific nail via a screen tap (powered by a Flood Fill algorithm in `NailSelector.kt`).
 4. [blendNailPolish](app/src/main/java/com/salon/nailtryon/NailBlend.kt) tints masked pixels; light glitter/matte passes optional.
 
 ## Tech stack

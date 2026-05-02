@@ -17,4 +17,6 @@
     <string name="mask_source_tflite">Mask: neural (nail_seg.tflite)</string>
     <string name="mask_source_landmarks">Mask: fingertip ovals (landmarks)</string>
     <string name="mask_source_none">Mask: —</string>
+    <string name="clear_selection">Clear selection</string>
+    <string name="select_single_nail">Select single nail (Tap)</string>
 </resources>

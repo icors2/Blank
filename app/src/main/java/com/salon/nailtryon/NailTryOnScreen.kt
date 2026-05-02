@@ -62,6 +62,9 @@ import androidx.core.content.FileProvider
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.ui.input.pointer.pointerInput
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -141,10 +144,17 @@ private fun NailTryOnContent(
     var nailOpacity by remember { mutableFloatStateOf(0.78f) }
     var preferTfliteMask by remember { mutableStateOf(segmenter.isReady) }
     var lastMaskSource by remember { mutableStateOf(NailMaskSource.None) }
+    
+    // New states for single nail isolation
+    var fullMaskBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var isolatedMaskBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var isolateSingleNailMode by remember { mutableStateOf(false) }
 
-    LaunchedEffect(sourceBitmap, landmarks, selectedColor, selectedDesign, nailOpacity, preferTfliteMask) {
+    LaunchedEffect(sourceBitmap, landmarks, selectedColor, selectedDesign, nailOpacity, preferTfliteMask, isolatedMaskBitmap, isolateSingleNailMode) {
         val src = sourceBitmap ?: run {
             processedBitmap = null
+            fullMaskBitmap = null
+            isolatedMaskBitmap = null
             lastMaskSource = NailMaskSource.None
             return@LaunchedEffect
         }
@@ -159,39 +169,47 @@ private fun NailTryOnContent(
         statusMessage = null
         try {
             val previous = processedBitmap
-            val (result, maskSrc) = withContext(Dispatchers.Default) {
+            val (result, maskSrc, newFullMask) = withContext(Dispatchers.Default) {
                 val maskFull = if (preferTfliteMask && segmenter.isReady) {
                     segmenter.buildMaskForBitmap(src)
                 } else {
                     null
                 }
+                
                 val maskSrc = if (maskFull != null) {
                     NailMaskSource.SegmentationModel
                 } else {
                     NailMaskSource.Landmarks
                 }
 
-                val mask = maskFull ?: run {
-                    val maxSide = maxOf(src.width, src.height)
-                    val scale = if (maxSide > LANDMARK_MASK_MAX_SIDE) {
-                        LANDMARK_MASK_MAX_SIDE.toFloat() / maxSide
-                    } else {
-                        1f
-                    }
-                    val mw = (src.width * scale).toInt().coerceAtLeast(1)
-                    val mh = (src.height * scale).toInt().coerceAtLeast(1)
-                    val small = LandmarkNailMask.buildSoftMask(mw, mh, lm)
-                    if (scale >= 0.999f) {
-                        small
-                    } else {
-                        Bitmap.createScaledBitmap(small, src.width, src.height, true).also {
-                            if (it !== small) small.recycle()
+                // If we are in isolated mode and have an isolated mask, use it.
+                // Otherwise use the full mask (either from TFLite or Landmarks).
+                val activeMask = if (isolateSingleNailMode && isolatedMaskBitmap != null) {
+                    isolatedMaskBitmap!!
+                } else {
+                    maskFull ?: run {
+                        val maxSide = maxOf(src.width, src.height)
+                        val scale = if (maxSide > LANDMARK_MASK_MAX_SIDE) {
+                            LANDMARK_MASK_MAX_SIDE.toFloat() / maxSide
+                        } else {
+                            1f
+                        }
+                        val mw = (src.width * scale).toInt().coerceAtLeast(1)
+                        val mh = (src.height * scale).toInt().coerceAtLeast(1)
+                        val small = LandmarkNailMask.buildSoftMask(mw, mh, lm)
+                        if (scale >= 0.999f) {
+                            small
+                        } else {
+                            Bitmap.createScaledBitmap(small, src.width, src.height, true).also {
+                                if (it !== small) small.recycle()
+                            }
                         }
                     }
                 }
+
                 val tinted = blendNailPolish(
                     src,
-                    mask,
+                    activeMask,
                     selectedColor.toPolishArgb(),
                     nailOpacity,
                 )
@@ -202,10 +220,12 @@ private fun NailTryOnContent(
                     nailOpacity,
                 )
                 if (tinted !== designed && tinted !== src) tinted.recycle()
-                Pair(designed, maskSrc)
+                Triple(designed, maskSrc, maskFull)
             }
             lastMaskSource = maskSrc
             processedBitmap = result
+            fullMaskBitmap = newFullMask
+            
             if (previous != null && previous !== src && previous !== result) {
                 previous.recycle()
             }
@@ -309,12 +329,37 @@ private fun NailTryOnContent(
         ) {
             when {
                 processedBitmap != null -> {
-                    Image(
-                        bitmap = processedBitmap!!.asImageBitmap(),
-                        contentDescription = null,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Fit,
-                    )
+                    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                        Image(
+                            bitmap = processedBitmap!!.asImageBitmap(),
+                            contentDescription = null,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .pointerInput(processedBitmap, isolateSingleNailMode, fullMaskBitmap) {
+                                    detectTapGestures { offset ->
+                                        if (isolateSingleNailMode) {
+                                            val maskToUse = fullMaskBitmap
+                                            if (maskToUse != null) {
+                                                val point = NailSelector.translateCoordinates(
+                                                    offset.x, offset.y,
+                                                    constraints.maxWidth.toFloat(),
+                                                    constraints.maxHeight.toFloat(),
+                                                    maskToUse.width,
+                                                    maskToUse.height
+                                                )
+                                                if (point != null) {
+                                                    val isolated = NailSelector.isolateSingleNail(
+                                                        maskToUse, point.x, point.y
+                                                    )
+                                                    isolatedMaskBitmap = isolated
+                                                }
+                                            }
+                                        }
+                                    }
+                                },
+                            contentScale = ContentScale.Fit,
+                        )
+                    }
                 }
 
                 else -> {
@@ -420,6 +465,13 @@ private fun NailTryOnContent(
             preferTfliteMask = preferTfliteMask,
             onPreferTfliteMaskChange = { preferTfliteMask = it },
             maskSource = lastMaskSource,
+            isolateSingleNailMode = isolateSingleNailMode,
+            onIsolateSingleNailModeChange = { 
+                isolateSingleNailMode = it
+                if (!it) isolatedMaskBitmap = null
+            },
+            canClearSelection = isolatedMaskBitmap != null,
+            onClearSelection = { isolatedMaskBitmap = null }
         )
     }
 }
@@ -454,6 +506,10 @@ private fun ControlsPanel(
     preferTfliteMask: Boolean,
     onPreferTfliteMaskChange: (Boolean) -> Unit,
     maskSource: NailMaskSource,
+    isolateSingleNailMode: Boolean,
+    onIsolateSingleNailModeChange: (Boolean) -> Unit,
+    canClearSelection: Boolean,
+    onClearSelection: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -484,6 +540,32 @@ private fun ControlsPanel(
                     checked = preferTfliteMask,
                     onCheckedChange = onPreferTfliteMaskChange,
                 )
+            }
+            
+            if (preferTfliteMask) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(stringResource(R.string.select_single_nail), style = MaterialTheme.typography.labelLarge)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (canClearSelection) {
+                            Text(
+                                text = stringResource(R.string.clear_selection),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier
+                                    .clickable { onClearSelection() }
+                                    .padding(end = 12.dp)
+                            )
+                        }
+                        Switch(
+                            checked = isolateSingleNailMode,
+                            onCheckedChange = onIsolateSingleNailModeChange,
+                        )
+                    }
+                }
             }
             Spacer(modifier = Modifier.height(8.dp))
         } else {
