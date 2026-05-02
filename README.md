@@ -33,9 +33,9 @@ Refresh from: https://storage.googleapis.com/mediapipe-models/hand_landmarker/ha
 
 Training outline (TensorFlow / Colab): see **[docs/nail_segmentation_colab_outline.ipynb](docs/nail_segmentation_colab_outline.ipynb)** — includes optional download for the Kaggle dataset [muhammadhammad261/nail-segmentation-dataset](https://www.kaggle.com/datasets/muhammadhammad261/nail-segmentation-dataset).
 
-### Optional nail segmentation model
+### Nail segmentation model (`nail_seg.tflite`)
 
-Add `app/src/main/assets/nail_seg.tflite` with float32 NHWC input `[1,H,W,3]` and a nail-probability map output (see `NailSegmentationHelper`). Until then the UI shows a hint and uses landmark masks only.
+Commit trained **`app/src/main/assets/nail_seg.tflite`** from Colab. On launch, [NailSegmentationHelper](app/src/main/java/com/salon/nailtryon/NailSegmentationHelper.kt) loads it; the UI shows **Use nail mask model** when `isReady`. Float32 RGB **[0,1]** input and sigmoid nail probability output (see helper KDoc). Without the file, landmark masks are used only.
 
 ## Permissions
 
