@@ -14,4 +14,7 @@
     <string name="error_no_hand">No hand detected. Try a clearer photo of your hand.</string>
     <string name="use_tflite_mask">Use nail mask model</string>
     <string name="landmark_mask_hint">Using fingertip landmarks for the nail area. Add assets/nail_seg.tflite for tighter masks.</string>
+    <string name="mask_source_tflite">Mask: neural (nail_seg.tflite)</string>
+    <string name="mask_source_landmarks">Mask: fingertip ovals (landmarks)</string>
+    <string name="mask_source_none">Mask: —</string>
 </resources>

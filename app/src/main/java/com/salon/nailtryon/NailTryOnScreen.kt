@@ -140,15 +140,18 @@ private fun NailTryOnContent(
     var selectedDesign by remember { mutableStateOf(NailDesign.SOLID) }
     var nailOpacity by remember { mutableFloatStateOf(0.78f) }
     var preferTfliteMask by remember { mutableStateOf(segmenter.isReady) }
+    var lastMaskSource by remember { mutableStateOf(NailMaskSource.None) }
 
     LaunchedEffect(sourceBitmap, landmarks, selectedColor, selectedDesign, nailOpacity, preferTfliteMask) {
         val src = sourceBitmap ?: run {
             processedBitmap = null
+            lastMaskSource = NailMaskSource.None
             return@LaunchedEffect
         }
         val lm = landmarks
         if (lm == null || lm.size < 21) {
             processedBitmap = src
+            lastMaskSource = NailMaskSource.None
             return@LaunchedEffect
         }
 
@@ -156,12 +159,18 @@ private fun NailTryOnContent(
         statusMessage = null
         try {
             val previous = processedBitmap
-            val result = withContext(Dispatchers.Default) {
+            val (result, maskSrc) = withContext(Dispatchers.Default) {
                 val maskFull = if (preferTfliteMask && segmenter.isReady) {
                     segmenter.buildMaskForBitmap(src)
                 } else {
                     null
                 }
+                val maskSrc = if (maskFull != null) {
+                    NailMaskSource.SegmentationModel
+                } else {
+                    NailMaskSource.Landmarks
+                }
+
                 val mask = maskFull ?: run {
                     val maxSide = maxOf(src.width, src.height)
                     val scale = if (maxSide > LANDMARK_MASK_MAX_SIDE) {
@@ -193,8 +202,9 @@ private fun NailTryOnContent(
                     nailOpacity,
                 )
                 if (tinted !== designed && tinted !== src) tinted.recycle()
-                designed
+                Pair(designed, maskSrc)
             }
+            lastMaskSource = maskSrc
             processedBitmap = result
             if (previous != null && previous !== src && previous !== result) {
                 previous.recycle()
@@ -409,6 +419,7 @@ private fun NailTryOnContent(
             tfliteAvailable = segmenter.isReady,
             preferTfliteMask = preferTfliteMask,
             onPreferTfliteMaskChange = { preferTfliteMask = it },
+            maskSource = lastMaskSource,
         )
     }
 }
@@ -442,6 +453,7 @@ private fun ControlsPanel(
     tfliteAvailable: Boolean,
     preferTfliteMask: Boolean,
     onPreferTfliteMaskChange: (Boolean) -> Unit,
+    maskSource: NailMaskSource,
 ) {
     Column(
         modifier = Modifier
@@ -449,6 +461,18 @@ private fun ControlsPanel(
             .background(MaterialTheme.colorScheme.surface)
             .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
+        val maskLabel = when (maskSource) {
+            NailMaskSource.SegmentationModel -> stringResource(R.string.mask_source_tflite)
+            NailMaskSource.Landmarks -> stringResource(R.string.mask_source_landmarks)
+            NailMaskSource.None -> stringResource(R.string.mask_source_none)
+        }
+        Text(
+            text = maskLabel,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+
         if (tfliteAvailable) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
