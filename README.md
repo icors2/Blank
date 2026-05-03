@@ -8,15 +8,22 @@ Offline-first salon nail preview: **pick or capture a hand photo**, detect hands
 2. Hand landmarks are detected ([RunningMode.IMAGE](https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker/android)).
 3. Mask:
    - Default: blurred ellipses at fingertips ([LandmarkNailMask](app/src/main/java/com/salon/nailtryon/NailBlend.kt)).
-   - Optional: place `nail_seg.tflite` in `app/src/main/assets/` and enable **Use nail mask model** (adjust [NailSegmentationHelper](app/src/main/java/com/salon/nailtryon/NailSegmentationHelper.kt) I/O to match your export).
-   - **Isolation**: When using the TFLite model, users can toggle **Select Single Nail** to isolate and color a specific nail via a screen tap (powered by a Flood Fill algorithm in `NailSelector.kt`).
-4. [blendNailPolish](app/src/main/java/com/salon/nailtryon/NailBlend.kt) tints masked pixels; light glitter/matte passes optional.
+   - **Advanced 3D Shading**: Extensions use a **cylindrical lighting model** (Shadow -> Highlight -> Shadow) and **alpha translucency** to simulate the depth and luster of real acrylics.
+   - **Cuticle Feathering**: Seamless "tuck" under the skin fold using soft-edge masking for a professional finish.
+   - **French, Matte, & Glitter**: Advanced blending shader handles professional designs including French tips (with procedural mask generation), Matte finishes, and Glitter effects.
+   - **Save to Gallery**: Export your designs directly to the device's photo gallery.
+   - **Vector Shapes**: Users can switch from **Natural** (segmentation/landmark based) to **Coffin** shape. This uses an advanced **Surveyor + Detailer** approach: MediaPipe landmarks provide the finger's rotation angle (Surveyor), while the TFLite mask provides precise nail width and length (Detailer).
+4. **Color Selection & Brand Library**:
+   - **Real-World Polish**: Choose from curated datasets of real brand colors.
+   - **Color Extraction**: Use the eye-dropper tool to tap anywhere on the image and extract a custom color.
+   - **Custom Library**: Save extracted colors to a personal brand group.
+5. [blendNailPolish](app/src/main/java/com/salon/nailtryon/NailBlend.kt) tints masked pixels; light glitter/matte passes optional.
 
 ## Tech stack
 
 - Kotlin, Jetpack Compose, Material 3  
 - MediaPipe Tasks Vision (`hand_landmarker.task` in `assets/`)  
-- TensorFlow Lite (optional `nail_seg.tflite`)  
+- TensorFlow Lite (optional `nail_seg_fp16.tflite`)
 - Min SDK 26, compile/target SDK 35  
 
 ## Build
@@ -34,9 +41,9 @@ Refresh from: https://storage.googleapis.com/mediapipe-models/hand_landmarker/ha
 
 Training outline (TensorFlow / Colab): see **[docs/nail_segmentation_colab_outline.ipynb](docs/nail_segmentation_colab_outline.ipynb)** — includes optional download for the Kaggle dataset [muhammadhammad261/nail-segmentation-dataset](https://www.kaggle.com/datasets/muhammadhammad261/nail-segmentation-dataset).
 
-### Nail segmentation model (`nail_seg.tflite`)
+### Nail segmentation model (`nail_seg_fp16.tflite`)
 
-Commit trained **`app/src/main/assets/nail_seg.tflite`** from Colab. On launch, [NailSegmentationHelper](app/src/main/java/com/salon/nailtryon/NailSegmentationHelper.kt) loads it; the UI shows **Use nail mask model** when `isReady`. Float32 RGB **[0,1]** input and sigmoid nail probability output (see helper KDoc). Without the file, landmark masks are used only.
+Commit trained **`app/src/main/assets/nail_seg_fp16.tflite`** from Colab. On launch, [NailSegmentationHelper](app/src/main/java/com/salon/nailtryon/NailSegmentationHelper.kt) loads it; the UI shows **Use nail mask model** when `isReady`. Float32 RGB **[0,1]** input and sigmoid nail probability output (see helper KDoc). Without the file, landmark masks are used only.
 
 ## Permissions
 
@@ -45,5 +52,4 @@ Commit trained **`app/src/main/assets/nail_seg.tflite`** from Colab. On launch, 
 
 ## Notes
 
-- **French** design chip currently maps to the same polish tint as solid (no separate free-edge band in bitmap mode yet); extend `applyDesignToBitmap` if needed.
-- Photorealism is limited without a trained nail segmenter and careful blending—this MVP targets **fast local color concepts**.
+- **Photorealism**: This MVP targets fast local color concepts using high-performance blending shaders and on-device AI.

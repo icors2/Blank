@@ -72,6 +72,7 @@ dependencies {
     implementation("org.tensorflow:tensorflow-lite:2.17.0")
 
     implementation("com.google.accompanist:accompanist-permissions:0.36.0")
+    implementation("androidx.exifinterface:exifinterface:1.4.2")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

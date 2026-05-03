@@ -19,4 +19,15 @@
     <string name="mask_source_none">Mask: —</string>
     <string name="clear_selection">Clear selection</string>
     <string name="select_single_nail">Select single nail (Tap)</string>
+    <string name="add_custom_color">Add custom color</string>
+    <string name="color_name_hint">Color name</string>
+    <string name="brand_name_hint">Brand name</string>
+    <string name="save_color">Save color</string>
+    <string name="cancel">Cancel</string>
+    <string name="extract_color_hint">Tap on the color you want to extract</string>
+    <string name="brands">Brands</string>
+    <string name="shapes">Shapes</string>
+    <string name="save_to_device">Save to Gallery</string>
+    <string name="image_saved">Image saved to Gallery</string>
+    <string name="error_save_image">Failed to save image.</string>
 </resources>

@@ -139,7 +139,7 @@ class NailSegmentationHelper(context: Context) {
 
     companion object {
         private const val TAG = "NailSegmentation"
-        const val MODEL_ASSET_NAME = "nail_seg.tflite"
+        const val MODEL_ASSET_NAME = "nail_seg_fp16.tflite"
 
         private fun loadModelFile(context: Context, assetName: String): MappedByteBuffer {
             context.assets.openFd(assetName).use { afd ->

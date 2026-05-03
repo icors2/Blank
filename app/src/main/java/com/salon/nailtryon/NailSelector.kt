@@ -77,6 +77,37 @@ object NailSelector {
     }
 
     /**
+     * Scans an [ALPHA_8] mask to find its bounding box.
+     */
+    fun getMaskBounds(mask: Bitmap): android.graphics.RectF? {
+        val width = mask.width
+        val height = mask.height
+        var left = width.toFloat()
+        var top = height.toFloat()
+        var right = 0f
+        var bottom = 0f
+        var found = false
+
+        val buffer = java.nio.ByteBuffer.allocate(width * height)
+        mask.copyPixelsToBuffer(buffer)
+        val pixels = buffer.array()
+
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                val alpha = pixels[y * width + x].toInt() and 0xFF
+                if (alpha > 128) {
+                    if (x < left) left = x.toFloat()
+                    if (x > right) right = x.toFloat()
+                    if (y < top) top = y.toFloat()
+                    if (y > bottom) bottom = y.toFloat()
+                    found = true
+                }
+            }
+        }
+        return if (found) android.graphics.RectF(left, top, right, bottom) else null
+    }
+
+    /**
      * Translates coordinates from a view with [ContentScale.Fit] to bitmap coordinates.
      */
     fun translateCoordinates(

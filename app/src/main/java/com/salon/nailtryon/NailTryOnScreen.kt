@@ -1,9 +1,16 @@
 package com.salon.nailtryon
 
 import android.Manifest
+import android.content.ContentValues
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Matrix as AndroidMatrix
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -23,10 +30,18 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddAPhoto
+import androidx.compose.material.icons.filled.Colorize
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -54,6 +69,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -92,22 +108,10 @@ private const val LANDMARK_MASK_MAX_SIDE = 512
 fun NailTryOnScreen() {
     val cameraPermission = rememberPermissionState(Manifest.permission.CAMERA)
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.app_name)) },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-                ),
-            )
-        },
-    ) { innerPadding ->
-        NailTryOnContent(
-            modifier = Modifier.padding(innerPadding),
-            cameraPermissionGranted = cameraPermission.status.isGranted,
-            onRequestCameraPermission = { cameraPermission.launchPermissionRequest() },
-        )
-    }
+    NailTryOnContent(
+        cameraPermissionGranted = cameraPermission.status.isGranted,
+        onRequestCameraPermission = { cameraPermission.launchPermissionRequest() },
+    )
 }
 
 @Composable
@@ -139,18 +143,24 @@ private fun NailTryOnContent(
     var processing by remember { mutableStateOf(false) }
     var statusMessage by remember { mutableStateOf<String?>(null) }
 
-    var selectedColor by remember { mutableStateOf(PaletteColors.first()) }
+    var selectedColor by remember { mutableStateOf(DefaultBrandColors.first().color) }
     var selectedDesign by remember { mutableStateOf(NailDesign.SOLID) }
+    var selectedShape by remember { mutableStateOf(NailShape.NATURAL) }
     var nailOpacity by remember { mutableFloatStateOf(0.78f) }
     var preferTfliteMask by remember { mutableStateOf(segmenter.isReady) }
     var lastMaskSource by remember { mutableStateOf(NailMaskSource.None) }
     
+    // Custom Colors state
+    var customColors by remember { mutableStateOf(listOf<BrandColor>()) }
+    var colorPickerActive by remember { mutableStateOf(false) }
+    var colorToSave by remember { mutableStateOf<Color?>(null) }
+
     // New states for single nail isolation
     var fullMaskBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var isolatedMaskBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var isolateSingleNailMode by remember { mutableStateOf(false) }
 
-    LaunchedEffect(sourceBitmap, landmarks, selectedColor, selectedDesign, nailOpacity, preferTfliteMask, isolatedMaskBitmap, isolateSingleNailMode) {
+    LaunchedEffect(sourceBitmap, landmarks, selectedColor, selectedDesign, selectedShape, nailOpacity, preferTfliteMask, isolatedMaskBitmap, isolateSingleNailMode) {
         val src = sourceBitmap ?: run {
             processedBitmap = null
             fullMaskBitmap = null
@@ -170,6 +180,7 @@ private fun NailTryOnContent(
         try {
             val previous = processedBitmap
             val (result, maskSrc, newFullMask) = withContext(Dispatchers.Default) {
+                // Step 1: Always build a NATURAL mask first for the base color
                 val maskFull = if (preferTfliteMask && segmenter.isReady) {
                     segmenter.buildMaskForBitmap(src)
                 } else {
@@ -182,9 +193,8 @@ private fun NailTryOnContent(
                     NailMaskSource.Landmarks
                 }
 
-                // If we are in isolated mode and have an isolated mask, use it.
-                // Otherwise use the full mask (either from TFLite or Landmarks).
-                val activeMask = if (isolateSingleNailMode && isolatedMaskBitmap != null) {
+                // Determine the natural nail mask (the "Detailer")
+                val naturalMask = if (isolateSingleNailMode && isolatedMaskBitmap != null) {
                     isolatedMaskBitmap!!
                 } else {
                     maskFull ?: run {
@@ -197,6 +207,7 @@ private fun NailTryOnContent(
                         val mw = (src.width * scale).toInt().coerceAtLeast(1)
                         val mh = (src.height * scale).toInt().coerceAtLeast(1)
                         val small = LandmarkNailMask.buildSoftMask(mw, mh, lm)
+                        
                         if (scale >= 0.999f) {
                             small
                         } else {
@@ -207,21 +218,80 @@ private fun NailTryOnContent(
                     }
                 }
 
-                val tinted = blendNailPolish(
+                val tipMask = if (selectedDesign == NailDesign.FRENCH) {
+                    LandmarkNailMask.buildFrenchTipMask(src.width, src.height, lm, selectedShape)
+                } else {
+                    null
+                }
+
+                // Apply polish to the natural nail bed
+                val designed = blendNailPolish(
                     src,
-                    activeMask,
+                    naturalMask,
                     selectedColor.toPolishArgb(),
                     nailOpacity,
-                )
-                val designed = applyDesignToBitmap(
-                    tinted,
                     selectedDesign,
-                    selectedColor.toPolishArgb(),
-                    nailOpacity,
+                    tipMask
                 )
-                if (tinted !== designed && tinted !== src) tinted.recycle()
+
+                // Step 2: Draw the Extension (The "Surveyor + Detailer" Matrix)
+                if (selectedShape != NailShape.NATURAL) {
+                    val fingerTips = listOf(4, 8, 12, 16, 20)
+                    val fingerDips = listOf(3, 7, 11, 15, 19)
+                    
+                    val renderer = NailShapeRenderer(context)
+                    val canvas = Canvas(designed)
+                    val hexColor = selectedColor.toHexString()
+                    val resId = when(selectedShape) {
+                        NailShape.COFFIN -> R.drawable.coffin_vector
+                        NailShape.STILETTO -> R.drawable.stiletto_vector
+                        NailShape.SQUARE -> R.drawable.square_vector
+                        else -> 0
+                    }
+                    
+                    if (resId != 0) {
+                        for (idx in fingerTips.indices) {
+                            val tipIdx = fingerTips[idx]
+                            val dipIdx = fingerDips[idx]
+                            
+                            val tip = lm[tipIdx]
+                            val dip = lm[dipIdx]
+                            
+                            // Surveyor: Precise rotation angle
+                            val angle = MaskAnalyzer.calculateAngle(dip, tip)
+                            
+                            // Detailer: Isolate this specific nail from the NATURAL mask
+                            val mx = (tip.first * naturalMask.width).toInt().coerceIn(0, naturalMask.width - 1)
+                            val my = (tip.second * naturalMask.height).toInt().coerceIn(0, naturalMask.height - 1)
+                            
+                            val isolatedNail = NailSelector.isolateSingleNail(naturalMask, mx, my)
+                            val geometry = MaskAnalyzer.analyzeNailMask(isolatedNail, angle)
+                            
+                            if (geometry != null) {
+                                // For the thumb (idx 0), we might want a different length multiplier
+                                val lengthMult = if (idx == 0) 1.2f else 1.45f
+                                
+                                val designToDraw = if (selectedDesign == NailDesign.FRENCH) NailDesign.SOLID else selectedDesign
+                                renderer.drawExtension(
+                                    canvas = canvas,
+                                    geometry = geometry,
+                                    shapeDrawableId = resId,
+                                    brandHexColor = hexColor,
+                                    lengthMultiplier = lengthMult,
+                                    widthMultiplier = 1.25f, // Stretch to cover lateral folds
+                                    design = designToDraw
+                                )
+                            }
+                            if (isolatedNail !== naturalMask) isolatedNail.recycle()
+                        }
+                    }
+                }
+                
+                tipMask?.recycle()
+                
                 Triple(designed, maskSrc, maskFull)
             }
+
             lastMaskSource = maskSrc
             processedBitmap = result
             fullMaskBitmap = newFullMask
@@ -335,24 +405,43 @@ private fun NailTryOnContent(
                             contentDescription = null,
                             modifier = Modifier
                                 .fillMaxSize()
-                                .pointerInput(processedBitmap, isolateSingleNailMode, fullMaskBitmap) {
+                                .pointerInput(processedBitmap, isolateSingleNailMode, fullMaskBitmap, colorPickerActive) {
                                     detectTapGestures { offset ->
-                                        if (isolateSingleNailMode) {
-                                            val maskToUse = fullMaskBitmap
-                                            if (maskToUse != null) {
-                                                val point = NailSelector.translateCoordinates(
-                                                    offset.x, offset.y,
-                                                    constraints.maxWidth.toFloat(),
-                                                    constraints.maxHeight.toFloat(),
-                                                    maskToUse.width,
-                                                    maskToUse.height
-                                                )
-                                                if (point != null) {
-                                                    val isolated = NailSelector.isolateSingleNail(
-                                                        maskToUse, point.x, point.y
-                                                    )
-                                                    isolatedMaskBitmap = isolated
+                                        val point = NailSelector.translateCoordinates(
+                                            offset.x, offset.y,
+                                            constraints.maxWidth.toFloat(),
+                                            constraints.maxHeight.toFloat(),
+                                            processedBitmap!!.width,
+                                            processedBitmap!!.height
+                                        )
+
+                                        if (colorPickerActive) {
+                                            if (point != null) {
+                                                // Pick from source bitmap for original color
+                                                val src = sourceBitmap
+                                                if (src != null) {
+                                                    // Ensure coordinates are within source bitmap if sizes differ
+                                                    val sx = (point.x.toFloat() / processedBitmap!!.width * src.width).toInt().coerceIn(0, src.width - 1)
+                                                    val sy = (point.y.toFloat() / processedBitmap!!.height * src.height).toInt().coerceIn(0, src.height - 1)
+                                                    val pixel = src.getPixel(sx, sy)
+                                                    colorToSave = Color(pixel)
+                                                    colorPickerActive = false
                                                 }
+                                            }
+                                        } else if (isolateSingleNailMode) {
+                                            val maskToUse = fullMaskBitmap
+                                            if (maskToUse != null && point != null) {
+                                                // Mask coordinates match processedBitmap coordinates usually, 
+                                                // but let's re-translate if mask size differs
+                                                val mp = if (maskToUse.width == processedBitmap!!.width) point else {
+                                                    val mx = (point.x.toFloat() / processedBitmap!!.width * maskToUse.width).toInt()
+                                                    val my = (point.y.toFloat() / processedBitmap!!.height * maskToUse.height).toInt()
+                                                    android.graphics.Point(mx, my)
+                                                }
+                                                val isolated = NailSelector.isolateSingleNail(
+                                                    maskToUse, mp.x, mp.y
+                                                )
+                                                isolatedMaskBitmap = isolated
                                             }
                                         }
                                     }
@@ -384,6 +473,22 @@ private fun NailTryOnContent(
                         .align(Alignment.TopCenter)
                         .fillMaxWidth(),
                 )
+            }
+
+            if (colorPickerActive) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 80.dp)
+                        .background(Color.Black.copy(alpha = 0.7f), MaterialTheme.shapes.medium)
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                ) {
+                    Text(
+                        stringResource(R.string.extract_color_hint),
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
             }
 
             statusMessage?.let { msg ->
@@ -450,29 +555,161 @@ private fun NailTryOnContent(
                     ) {
                         Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.clear_photo))
                     }
+
+                    processedBitmap?.let { bitmap ->
+                        IconButton(
+                            onClick = {
+                                scope.launch {
+                                    val success = saveBitmapToGallery(context, bitmap)
+                                    val msg = if (success) {
+                                        context.getString(R.string.image_saved)
+                                    } else {
+                                        context.getString(R.string.error_save_image)
+                                    }
+                                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            modifier = Modifier
+                                .size(52.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f)),
+                        ) {
+                            Icon(
+                                Icons.Default.SaveAlt,
+                                contentDescription = stringResource(R.string.save_to_device),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
                 }
             }
         }
 
-        ControlsPanel(
-            selectedColor = selectedColor,
-            onColorSelected = { selectedColor = it },
-            selectedDesign = selectedDesign,
-            onDesignSelected = { selectedDesign = it },
-            opacity = nailOpacity,
-            onOpacityChange = { nailOpacity = it },
-            tfliteAvailable = segmenter.isReady,
-            preferTfliteMask = preferTfliteMask,
-            onPreferTfliteMaskChange = { preferTfliteMask = it },
-            maskSource = lastMaskSource,
-            isolateSingleNailMode = isolateSingleNailMode,
-            onIsolateSingleNailModeChange = { 
-                isolateSingleNailMode = it
-                if (!it) isolatedMaskBitmap = null
-            },
-            canClearSelection = isolatedMaskBitmap != null,
-            onClearSelection = { isolatedMaskBitmap = null }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(0.5f)
+        ) {
+            ControlsPanel(
+                selectedColor = selectedColor,
+                onColorSelected = { selectedColor = it },
+                customColors = customColors,
+                onAddCustomColorClicked = { colorPickerActive = true },
+                selectedDesign = selectedDesign,
+                onDesignSelected = { selectedDesign = it },
+                selectedShape = selectedShape,
+                onShapeSelected = { selectedShape = it },
+                opacity = nailOpacity,
+                onOpacityChange = { nailOpacity = it },
+                tfliteAvailable = segmenter.isReady,
+                preferTfliteMask = preferTfliteMask,
+                onPreferTfliteMaskChange = { preferTfliteMask = it },
+                maskSource = lastMaskSource,
+                isolateSingleNailMode = isolateSingleNailMode,
+                onIsolateSingleNailModeChange = {
+                    isolateSingleNailMode = it
+                    if (!it) isolatedMaskBitmap = null
+                },
+                canClearSelection = isolatedMaskBitmap != null,
+                onClearSelection = { isolatedMaskBitmap = null }
+            )
+        }
+    }
+
+    if (colorToSave != null) {
+        CustomColorSaveDialog(
+            color = colorToSave!!,
+            onDismiss = { colorToSave = null },
+            onSave = { name, brand ->
+                customColors = customColors + BrandColor(brand, name, colorToSave!!, isCustom = true)
+                selectedColor = colorToSave!!
+                colorToSave = null
+            }
         )
+    }
+}
+
+@Composable
+private fun CustomColorSaveDialog(
+    color: Color,
+    onDismiss: () -> Unit,
+    onSave: (String, String) -> Unit
+) {
+    var name by remember { mutableStateOf("") }
+    var brand by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.add_custom_color)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(
+                    modifier = Modifier
+                        .size(64.dp)
+                        .clip(CircleShape)
+                        .background(color)
+                        .align(Alignment.CenterHorizontally)
+                )
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text(stringResource(R.string.color_name_hint)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = brand,
+                    onValueChange = { brand = it },
+                    label = { Text(stringResource(R.string.brand_name_hint)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSave(name, brand) },
+                enabled = name.isNotBlank()
+            ) {
+                Text(stringResource(R.string.save_color))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.cancel))
+            }
+        }
+    )
+}
+
+private suspend fun saveBitmapToGallery(context: android.content.Context, bitmap: Bitmap): Boolean = withContext(Dispatchers.IO) {
+    val filename = "NailTryOn_${System.currentTimeMillis()}.jpg"
+    val contentValues = ContentValues().apply {
+        put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
+        put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/NailTryOn")
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+    }
+
+    val resolver = context.contentResolver
+    val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues) ?: return@withContext false
+
+    try {
+        resolver.openOutputStream(uri)?.use { os ->
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 95, os)
+        } ?: return@withContext false
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            contentValues.clear()
+            contentValues.put(MediaStore.MediaColumns.IS_PENDING, 0)
+            resolver.update(uri, contentValues, null, null)
+        }
+        true
+    } catch (e: Exception) {
+        resolver.delete(uri, null, null)
+        false
     }
 }
 
@@ -488,8 +725,31 @@ private fun decodeBitmapMaxSide(context: android.content.Context, uri: Uri, maxS
         sample *= 2
     }
     val opts = BitmapFactory.Options().apply { inSampleSize = sample }
-    return resolver.openInputStream(uri)?.use {
+    val bitmap = resolver.openInputStream(uri)?.use {
         BitmapFactory.decodeStream(it, null, opts)
+    } ?: return null
+
+    // Handle EXIF rotation
+    return try {
+        val exif = resolver.openInputStream(uri)?.use { stream ->
+            androidx.exifinterface.media.ExifInterface(stream)
+        }
+        val orientation = exif?.getAttributeInt(
+            androidx.exifinterface.media.ExifInterface.TAG_ORIENTATION,
+            androidx.exifinterface.media.ExifInterface.ORIENTATION_UNDEFINED
+        )
+        val matrix = AndroidMatrix()
+        when (orientation) {
+            androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+            androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+            androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+            else -> return bitmap
+        }
+        Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true).also {
+            if (it !== bitmap) bitmap.recycle()
+        }
+    } catch (e: Exception) {
+        bitmap
     }
 }
 
@@ -498,8 +758,12 @@ private fun decodeBitmapMaxSide(context: android.content.Context, uri: Uri, maxS
 private fun ControlsPanel(
     selectedColor: Color,
     onColorSelected: (Color) -> Unit,
+    customColors: List<BrandColor>,
+    onAddCustomColorClicked: () -> Unit,
     selectedDesign: NailDesign,
     onDesignSelected: (NailDesign) -> Unit,
+    selectedShape: NailShape,
+    onShapeSelected: (NailShape) -> Unit,
     opacity: Float,
     onOpacityChange: (Float) -> Unit,
     tfliteAvailable: Boolean,
@@ -515,6 +779,7 @@ private fun ControlsPanel(
         modifier = Modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surface)
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
         val maskLabel = when (maskSource) {
@@ -584,24 +849,41 @@ private fun ControlsPanel(
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            PaletteColors.forEach { c ->
-                val selected = c == selectedColor
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(c)
-                        .border(
-                            width = if (selected) 3.dp else 1.dp,
-                            color = if (selected) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                Color.White.copy(alpha = 0.4f)
-                            },
-                            shape = CircleShape,
-                        )
-                        .clickable { onColorSelected(c) },
+            // Add Custom Color Button
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape)
+                    .clickable { onAddCustomColorClicked() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.Colorize,
+                    contentDescription = stringResource(R.string.add_custom_color),
+                    modifier = Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            // Custom Colors
+            customColors.forEach { bc ->
+                ColorSwatch(
+                    color = bc.color,
+                    isSelected = bc.color == selectedColor,
+                    onClick = { onColorSelected(bc.color) }
+                )
+            }
+
+            // Default Colors
+            DefaultBrandColors.forEach { bc ->
+                ColorSwatch(
+                    color = bc.color,
+                    isSelected = bc.color == selectedColor,
+                    onClick = { onColorSelected(bc.color) }
                 )
             }
         }
@@ -618,10 +900,38 @@ private fun ControlsPanel(
                     selected = design == selectedDesign,
                     onClick = { onDesignSelected(design) },
                     label = {
-                        Text(
-                            design.name.lowercase().replaceFirstChar { it.uppercase() },
-                            style = MaterialTheme.typography.labelMedium,
-                        )
+                        val label = when(design) {
+                            NailDesign.SOLID -> "Solid"
+                            NailDesign.FRENCH -> "French"
+                            NailDesign.GLITTER -> "Glitter"
+                            NailDesign.MATTE -> "Matte"
+                        }
+                        Text(label, style = MaterialTheme.typography.labelMedium)
+                    },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(stringResource(R.string.shapes), style = MaterialTheme.typography.labelLarge)
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            NailShape.entries.forEach { shape ->
+                FilterChip(
+                    selected = shape == selectedShape,
+                    onClick = { onShapeSelected(shape) },
+                    label = {
+                        val label = when(shape) {
+                            NailShape.NATURAL -> "Natural"
+                            NailShape.COFFIN -> "Coffin"
+                            NailShape.STILETTO -> "Stiletto"
+                            NailShape.SQUARE -> "Square"
+                        }
+                        Text(label, style = MaterialTheme.typography.labelMedium)
                     },
                     modifier = Modifier.weight(1f),
                 )
@@ -641,3 +951,29 @@ private fun ControlsPanel(
         )
     }
 }
+
+@Composable
+private fun ColorSwatch(
+    color: Color,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .size(40.dp)
+            .clip(CircleShape)
+            .background(color)
+            .border(
+                width = if (isSelected) 3.dp else 1.dp,
+                color = if (isSelected) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    Color.White.copy(alpha = 0.4f)
+                },
+                shape = CircleShape,
+            )
+            .clickable { onClick() },
+    )
+}
+
+private fun Color.toHexString(): String = String.format("#%06X", (this.toArgb() and 0xFFFFFF))
